@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #fafaf7;
+  --color-surface: #ffffff;
+  --color-elevated: #f5f5f0;
+  --color-border: #d4d4cc;
+  --color-fg: #1a1a1a;
+  --color-muted: #525252;
+  --color-subtle: #a3a3a3;
+  --color-accent: #b91c1c;
+  --color-accent-soft: #fee2e2;
+  --color-success: #15803d;
+  --color-danger: #991b1b;
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-fraunces), "Playfair Display", Georgia, serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SF Mono", monospace;
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-feature-settings: "ss01", "ss02";
+}
+
+body {
+  font-family: var(--font-sans);
+  line-height: 1.6;
+}
+
+::selection {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.dropcap::first-letter {
+  font-family: var(--font-serif);
+  font-size: 4.5rem;
+  font-weight: 700;
+  float: left;
+  line-height: 0.85;
+  margin: 0.35rem 0.6rem 0 0;
+  color: var(--color-accent);
+}
