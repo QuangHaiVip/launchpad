@@ -3,6 +3,8 @@
 > Soft cap, hard cap, deadline. Buyers pledge XLM, claim tokens on success, refund on failure. The contract decides; no admin steps in.
 
 A SEP-41 token sale on Stellar Testnet. Buyers pledge XLM during a fixed window. If the soft cap is met by the deadline, the sale is marked `Successful` and buyers can claim their pro-rata share of the launched token. If the soft cap is missed, buyers self-refund.
+<img width="1260" height="704" alt="image" src="https://github.com/user-attachments/assets/cba46e0e-dcc3-4edb-a3b7-b88c3e65eadc" />
+
 
 [![CI](https://github.com/QuangHaiVip/launchpad/actions/workflows/ci.yml/badge.svg)](https://github.com/QuangHaiVip/launchpad/actions)
 ![Network](https://img.shields.io/badge/network-Stellar%20Testnet-2563eb)
@@ -42,8 +44,8 @@ The launchpad is an accounting + minting contract; XLM movement happens via Hori
 |---|---|
 | Launchpad | [`CA5FQOS2...UQEV`](https://stellar.expert/explorer/testnet/contract/CA5FQOS2CJDVAMDB6MTSKREELLK3ZQZULG3LPFUPX5DE5645O3ZMUQEV) |
 | LPT token | [`CAD6I6ZE...WKIZ`](https://stellar.expert/explorer/testnet/contract/CAD6I6ZEECDOFJNKUS5KGDXFXAY3I5PT5GBLEVAM7RKTNZG4NBQQWKIZ) |
-| Live demo | _(Vercel URL goes here)_ |
-| Demo video | _(1-min walkthrough)_ |
+| Live demo | https://launchpad-zeta-two.vercel.app/|
+| Demo video | https://drive.google.com/file/d/1N0MeKQr8_qc5daHUhVarta3UrFbuEe4G/view?usp=sharing|
 
 ## What You Get
 
@@ -92,10 +94,11 @@ GitHub Actions handles CI: `cargo test` on the contract crates and typecheck + `
 ```bash
 cd contract && cargo test
 ```
+<img width="664" height="523" alt="image" src="https://github.com/user-attachments/assets/6b7fbc25-0e18-438a-8852-8dba7c0d2491" />
 
-## Screenshots
 
-`docs/screenshots/mobile.png`
+## Screenshots Mobile view
+<img width="390" height="618" alt="image" src="https://github.com/user-attachments/assets/20262536-120b-4160-abec-50a3a52460c5" />
 
 ## Notes
 
