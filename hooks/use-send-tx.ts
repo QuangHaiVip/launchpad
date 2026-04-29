@@ -2,7 +2,13 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { networkPassphrase } from "@/lib/stellar";
-import { invokeContract, addrArg, i128Arg, readContract } from "@/lib/soroban";
+import {
+  invokeContract,
+  addrArg,
+  i128Arg,
+  u64Arg,
+  readContract,
+} from "@/lib/soroban";
 import { StellarWalletsKit } from "@/lib/wallets";
 
 const PAD_ID = process.env.NEXT_PUBLIC_MAIN_CONTRACT_ID;
@@ -25,21 +31,54 @@ function signer(addr: string) {
 
 function invalidate(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: ["balance"] });
-  qc.invalidateQueries({ queryKey: ["sale"] });
+  qc.invalidateQueries({ queryKey: ["campaign"] });
+  qc.invalidateQueries({ queryKey: ["campaigns"] });
+  qc.invalidateQueries({ queryKey: ["campaign-count"] });
   qc.invalidateQueries({ queryKey: ["pledged"] });
   qc.invalidateQueries({ queryKey: ["events"] });
+}
+
+export type CreateCampaignInput = {
+  priceTokensPerXlm: bigint;
+  softCap: bigint;
+  hardCap: bigint;
+  deadline: bigint;
+};
+
+export function useCreateCampaign(address: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: CreateCampaignInput) => {
+      if (!address) throw new Error("connect a wallet first");
+      const id = ensureId();
+      return invokeContract({
+        contractId: id,
+        method: "create_campaign",
+        args: [
+          addrArg(address),
+          i128Arg(input.priceTokensPerXlm),
+          i128Arg(input.softCap),
+          i128Arg(input.hardCap),
+          u64Arg(input.deadline),
+        ],
+        source: address,
+        signXdr: signer(address),
+      });
+    },
+    onSuccess: () => invalidate(qc),
+  });
 }
 
 export function usePledge(address: string | null) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (xlm: bigint) => {
+    mutationFn: async (input: { campaignId: bigint; xlm: bigint }) => {
       if (!address) throw new Error("connect a wallet first");
       const id = ensureId();
       return invokeContract({
         contractId: id,
         method: "pledge",
-        args: [addrArg(address), i128Arg(xlm)],
+        args: [addrArg(address), u64Arg(input.campaignId), i128Arg(input.xlm)],
         source: address,
         signXdr: signer(address),
       });
@@ -51,13 +90,13 @@ export function usePledge(address: string | null) {
 export function useClaim(address: string | null) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async () => {
+    mutationFn: async (campaignId: bigint) => {
       if (!address) throw new Error("connect a wallet first");
       const id = ensureId();
       return invokeContract({
         contractId: id,
         method: "claim",
-        args: [addrArg(address)],
+        args: [addrArg(address), u64Arg(campaignId)],
         source: address,
         signXdr: signer(address),
       });
@@ -69,13 +108,13 @@ export function useClaim(address: string | null) {
 export function useRefund(address: string | null) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async () => {
+    mutationFn: async (campaignId: bigint) => {
       if (!address) throw new Error("connect a wallet first");
       const id = ensureId();
       return invokeContract({
         contractId: id,
         method: "refund",
-        args: [addrArg(address)],
+        args: [addrArg(address), u64Arg(campaignId)],
         source: address,
         signXdr: signer(address),
       });
@@ -87,13 +126,13 @@ export function useRefund(address: string | null) {
 export function useFinalize(address: string | null) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async () => {
+    mutationFn: async (campaignId: bigint) => {
       if (!address) throw new Error("connect a wallet first");
       const id = ensureId();
       return invokeContract({
         contractId: id,
         method: "finalize",
-        args: [],
+        args: [u64Arg(campaignId)],
         source: address,
         signXdr: signer(address),
       });
@@ -102,50 +141,136 @@ export function useFinalize(address: string | null) {
   });
 }
 
-export type SaleState = {
-  totalRaised: bigint;
+export type Campaign = {
+  id: bigint;
+  creator: string;
+  priceTokensPerXlm: bigint;
   softCap: bigint;
   hardCap: bigint;
   deadline: bigint;
+  totalRaised: bigint;
   status: number;
 };
 
-export function useSaleState() {
-  return useQuery<SaleState>({
-    queryKey: ["sale", PAD_ID],
+const STATUS_LABEL = ["Active", "Successful", "Failed"] as const;
+export function statusLabel(n: number) {
+  return STATUS_LABEL[n] ?? "?";
+}
+
+function normalizeStatus(raw: unknown): number {
+  if (typeof raw === "number") return raw;
+  if (typeof raw === "string") {
+    const i = STATUS_LABEL.indexOf(raw as (typeof STATUS_LABEL)[number]);
+    return i >= 0 ? i : 0;
+  }
+  if (Array.isArray(raw) && typeof raw[0] === "string") {
+    const i = STATUS_LABEL.indexOf(raw[0] as (typeof STATUS_LABEL)[number]);
+    return i >= 0 ? i : 0;
+  }
+  if (raw && typeof raw === "object") {
+    const tag = (raw as { tag?: string }).tag;
+    if (tag) {
+      const i = STATUS_LABEL.indexOf(tag as (typeof STATUS_LABEL)[number]);
+      if (i >= 0) return i;
+    }
+  }
+  return 0;
+}
+
+export function useCampaignCount() {
+  return useQuery<bigint>({
+    queryKey: ["campaign-count", PAD_ID],
     queryFn: async () => {
-      if (!PAD_ID) throw new Error("not configured");
-      const tup = await readContract<[bigint, bigint, bigint, bigint, number]>({
+      if (!PAD_ID) return 0n;
+      return readContract<bigint>({
         contractId: PAD_ID,
-        method: "sale_state",
+        method: "campaign_count",
         args: [],
       });
-      return {
-        totalRaised: tup[0],
-        softCap: tup[1],
-        hardCap: tup[2],
-        deadline: tup[3],
-        status: Number(tup[4]),
-      };
     },
     enabled: !!PAD_ID,
     refetchInterval: 8_000,
   });
 }
 
-export function usePledgedOf(address: string | null) {
-  return useQuery<bigint>({
-    queryKey: ["pledged", PAD_ID, address],
+export function useCampaign(campaignId: bigint | null) {
+  return useQuery<Campaign | null>({
+    queryKey: ["campaign", PAD_ID, campaignId?.toString() ?? null],
     queryFn: async () => {
-      if (!PAD_ID || !address) return 0n;
+      if (!PAD_ID || campaignId === null) return null;
+      const raw = await readContract<unknown>({
+        contractId: PAD_ID,
+        method: "campaign",
+        args: [u64Arg(campaignId)],
+      });
+      if (!raw || typeof raw !== "object") return null;
+      const r = raw as Record<string, unknown>;
+      return {
+        id: campaignId,
+        creator: String(r.creator ?? ""),
+        priceTokensPerXlm: BigInt((r.price_tokens_per_xlm as bigint | number) ?? 0),
+        softCap: BigInt((r.soft_cap as bigint | number) ?? 0),
+        hardCap: BigInt((r.hard_cap as bigint | number) ?? 0),
+        deadline: BigInt((r.deadline as bigint | number) ?? 0),
+        totalRaised: BigInt((r.total_raised as bigint | number) ?? 0),
+        status: normalizeStatus(r.status),
+      };
+    },
+    enabled: !!PAD_ID && campaignId !== null,
+    refetchInterval: 8_000,
+  });
+}
+
+export function useAllCampaigns() {
+  const count = useCampaignCount();
+  return useQuery<Campaign[]>({
+    queryKey: ["campaigns", PAD_ID, count.data?.toString() ?? "0"],
+    queryFn: async () => {
+      if (!PAD_ID) return [];
+      const total = Number(count.data ?? 0n);
+      if (total === 0) return [];
+      const ids = Array.from({ length: total }, (_, i) => BigInt(i));
+      const results = await Promise.all(
+        ids.map(async (cid) => {
+          const raw = await readContract<unknown>({
+            contractId: PAD_ID,
+            method: "campaign",
+            args: [u64Arg(cid)],
+          }).catch(() => null);
+          if (!raw || typeof raw !== "object") return null;
+          const r = raw as Record<string, unknown>;
+          return {
+            id: cid,
+            creator: String(r.creator ?? ""),
+            priceTokensPerXlm: BigInt((r.price_tokens_per_xlm as bigint | number) ?? 0),
+            softCap: BigInt((r.soft_cap as bigint | number) ?? 0),
+            hardCap: BigInt((r.hard_cap as bigint | number) ?? 0),
+            deadline: BigInt((r.deadline as bigint | number) ?? 0),
+            totalRaised: BigInt((r.total_raised as bigint | number) ?? 0),
+            status: normalizeStatus(r.status),
+          } satisfies Campaign;
+        }),
+      );
+      return results.filter((c): c is Campaign => c !== null);
+    },
+    enabled: !!PAD_ID && count.data !== undefined,
+    refetchInterval: 8_000,
+  });
+}
+
+export function usePledgedOf(address: string | null, campaignId: bigint | null) {
+  return useQuery<bigint>({
+    queryKey: ["pledged", PAD_ID, campaignId?.toString() ?? null, address],
+    queryFn: async () => {
+      if (!PAD_ID || !address || campaignId === null) return 0n;
       return readContract<bigint>({
         contractId: PAD_ID,
         method: "pledged_of",
-        args: [addrArg(address)],
+        args: [u64Arg(campaignId), addrArg(address)],
         source: address,
       });
     },
-    enabled: !!PAD_ID && !!address,
+    enabled: !!PAD_ID && !!address && campaignId !== null,
     refetchInterval: 8_000,
   });
 }

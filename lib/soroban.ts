@@ -32,6 +32,14 @@ export function i128Arg(stroops: bigint): ScArg {
   return nativeToScVal(stroops, { type: "i128" });
 }
 
+export function u64Arg(n: bigint | number): ScArg {
+  return nativeToScVal(BigInt(n), { type: "u64" });
+}
+
+export function u32Arg(n: number): ScArg {
+  return nativeToScVal(n, { type: "u32" });
+}
+
 export function strArg(s: string): ScArg {
   return nativeToScVal(s, { type: "string" });
 }

@@ -62,22 +62,11 @@ MAIN_WASM=contract/target/wasm32v1-none/release/main_contract.wasm
 
 echo "==> deploying main contract"
 if [ "$USES_TOKEN" -eq 1 ]; then
-  # Sale parameters: 100 receipt tokens per 1 XLM, soft cap 50 XLM, hard cap 200 XLM, 7-day window.
-  SOFT_CAP=500000000          # 50 XLM in stroops
-  HARD_CAP=2000000000         # 200 XLM in stroops
-  PRICE=100                   # tokens minted per XLM contributed (in token base units)
-  DEADLINE=$(( $(date +%s) + 60*60*24*7 ))
   MAIN=$(stellar contract deploy \
     --wasm "$MAIN_WASM" \
     --source "$SOURCE" \
     --network "$NETWORK" \
-    -- \
-      --creator "$ADMIN" \
-      --token "$RECEIPT" \
-      --price_tokens_per_xlm "$PRICE" \
-      --soft_cap "$SOFT_CAP" \
-      --hard_cap "$HARD_CAP" \
-      --deadline "$DEADLINE" \
+    -- --token "$RECEIPT" \
     2>&1 | tail -1)
 else
   MAIN=$(stellar contract deploy \

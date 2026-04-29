@@ -18,6 +18,8 @@ pub enum Error {
     HardCapExceeded = 7,
     NoPledge = 8,
     AlreadyClaimed = 9,
+    CampaignNotFound = 10,
+    InvalidParams = 11,
 }
 
 #[contracttype]
@@ -30,17 +32,24 @@ pub enum Status {
 
 #[contracttype]
 #[derive(Clone)]
+pub struct Campaign {
+    pub creator: Address,
+    pub price_tokens_per_xlm: i128,
+    pub soft_cap: i128,
+    pub hard_cap: i128,
+    pub deadline: u64,
+    pub total_raised: i128,
+    pub status: Status,
+}
+
+#[contracttype]
+#[derive(Clone)]
 pub enum DataKey {
     Token,
-    Creator,
-    PriceTokensPerXlm,
-    SoftCap,
-    HardCap,
-    Deadline,
-    TotalRaised,
-    Status,
-    Pledged(Address),
-    Claimed(Address),
+    NextId,
+    Campaign(u64),
+    Pledged(u64, Address),
+    Claimed(u64, Address),
 }
 
 #[contractclient(name = "TokenClient")]
@@ -53,132 +62,147 @@ pub struct Launchpad;
 
 #[contractimpl]
 impl Launchpad {
-    pub fn __constructor(
+    pub fn __constructor(env: Env, token: Address) {
+        env.storage().instance().set(&DataKey::Token, &token);
+        env.storage().instance().set(&DataKey::NextId, &0_u64);
+    }
+
+    /// Open a new fundraising campaign. Anyone can call but they must auth as
+    /// `creator`; the creator is recorded as metadata (no special runtime auth).
+    /// Returns the new campaign id.
+    pub fn create_campaign(
         env: Env,
         creator: Address,
-        token: Address,
         price_tokens_per_xlm: i128,
         soft_cap: i128,
         hard_cap: i128,
         deadline: u64,
-    ) {
-        env.storage().instance().set(&DataKey::Creator, &creator);
-        env.storage().instance().set(&DataKey::Token, &token);
+    ) -> Result<u64, Error> {
+        creator.require_auth();
+        if price_tokens_per_xlm <= 0
+            || soft_cap <= 0
+            || hard_cap <= 0
+            || hard_cap < soft_cap
+            || deadline <= env.ledger().timestamp()
+        {
+            return Err(Error::InvalidParams);
+        }
+
+        let id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextId)
+            .unwrap_or(0);
+        let campaign = Campaign {
+            creator: creator.clone(),
+            price_tokens_per_xlm,
+            soft_cap,
+            hard_cap,
+            deadline,
+            total_raised: 0,
+            status: Status::Active,
+        };
+        env.storage().persistent().set(&DataKey::Campaign(id), &campaign);
         env.storage()
             .instance()
-            .set(&DataKey::PriceTokensPerXlm, &price_tokens_per_xlm);
-        env.storage().instance().set(&DataKey::SoftCap, &soft_cap);
-        env.storage().instance().set(&DataKey::HardCap, &hard_cap);
-        env.storage().instance().set(&DataKey::Deadline, &deadline);
-        env.storage().instance().set(&DataKey::TotalRaised, &0_i128);
-        env.storage().instance().set(&DataKey::Status, &Status::Active);
+            .set(&DataKey::NextId, &(id + 1));
+
+        env.events().publish(
+            (symbol_short!("create"), creator),
+            (id, soft_cap, hard_cap, deadline),
+        );
+        Ok(id)
     }
 
-    pub fn pledge(env: Env, buyer: Address, amount: i128) -> Result<(), Error> {
+    pub fn pledge(
+        env: Env,
+        buyer: Address,
+        campaign_id: u64,
+        amount: i128,
+    ) -> Result<(), Error> {
         buyer.require_auth();
         if amount <= 0 {
             return Err(Error::AmountMustBePositive);
         }
-        let status: Status = env
+        let mut campaign: Campaign = env
             .storage()
-            .instance()
-            .get(&DataKey::Status)
-            .ok_or(Error::NotInitialized)?;
-        if status != Status::Active {
+            .persistent()
+            .get(&DataKey::Campaign(campaign_id))
+            .ok_or(Error::CampaignNotFound)?;
+        if campaign.status != Status::Active {
             return Err(Error::SaleClosed);
         }
-        let deadline: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::Deadline)
-            .ok_or(Error::NotInitialized)?;
-        if env.ledger().timestamp() >= deadline {
+        if env.ledger().timestamp() >= campaign.deadline {
             return Err(Error::SaleClosed);
         }
-        let hard_cap: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::HardCap)
-            .ok_or(Error::NotInitialized)?;
-        let total: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::TotalRaised)
-            .unwrap_or(0);
-        if total + amount > hard_cap {
+        if campaign.total_raised + amount > campaign.hard_cap {
             return Err(Error::HardCapExceeded);
         }
 
         let prev: i128 = env
             .storage()
             .persistent()
-            .get(&DataKey::Pledged(buyer.clone()))
+            .get(&DataKey::Pledged(campaign_id, buyer.clone()))
             .unwrap_or(0);
+        env.storage().persistent().set(
+            &DataKey::Pledged(campaign_id, buyer.clone()),
+            &(prev + amount),
+        );
+        campaign.total_raised += amount;
         env.storage()
             .persistent()
-            .set(&DataKey::Pledged(buyer.clone()), &(prev + amount));
-        env.storage()
-            .instance()
-            .set(&DataKey::TotalRaised, &(total + amount));
+            .set(&DataKey::Campaign(campaign_id), &campaign);
 
         env.events()
-            .publish((symbol_short!("pledge"), buyer), amount);
+            .publish((symbol_short!("pledge"), buyer), (campaign_id, amount));
         Ok(())
     }
 
-    pub fn finalize(env: Env) -> Result<Status, Error> {
-        let status: Status = env
+    pub fn finalize(env: Env, campaign_id: u64) -> Result<Status, Error> {
+        let mut campaign: Campaign = env
             .storage()
-            .instance()
-            .get(&DataKey::Status)
-            .ok_or(Error::NotInitialized)?;
-        if status != Status::Active {
+            .persistent()
+            .get(&DataKey::Campaign(campaign_id))
+            .ok_or(Error::CampaignNotFound)?;
+        if campaign.status != Status::Active {
             return Err(Error::SaleClosed);
         }
-        let deadline: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::Deadline)
-            .ok_or(Error::NotInitialized)?;
-        if env.ledger().timestamp() < deadline {
+        if env.ledger().timestamp() < campaign.deadline {
             return Err(Error::SaleStillOpen);
         }
-        let total: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::TotalRaised)
-            .unwrap_or(0);
-        let soft_cap: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::SoftCap)
-            .ok_or(Error::NotInitialized)?;
 
-        let new_status = if total >= soft_cap {
+        campaign.status = if campaign.total_raised >= campaign.soft_cap {
             Status::Successful
         } else {
             Status::Failed
         };
-        env.storage().instance().set(&DataKey::Status, &new_status);
-        env.events()
-            .publish((symbol_short!("finalize"),), (total, new_status as u32));
+        let new_status = campaign.status;
+        let total = campaign.total_raised;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Campaign(campaign_id), &campaign);
+
+        env.events().publish(
+            (symbol_short!("finalize"),),
+            (campaign_id, total, new_status as u32),
+        );
         Ok(new_status)
     }
 
-    pub fn claim(env: Env, buyer: Address) -> Result<i128, Error> {
+    pub fn claim(env: Env, buyer: Address, campaign_id: u64) -> Result<i128, Error> {
         buyer.require_auth();
-        let status: Status = env
+        let campaign: Campaign = env
             .storage()
-            .instance()
-            .get(&DataKey::Status)
-            .ok_or(Error::NotInitialized)?;
-        if status != Status::Successful {
+            .persistent()
+            .get(&DataKey::Campaign(campaign_id))
+            .ok_or(Error::CampaignNotFound)?;
+        if campaign.status != Status::Successful {
             return Err(Error::SoftCapNotMet);
         }
         let pledged: i128 = env
             .storage()
             .persistent()
-            .get(&DataKey::Pledged(buyer.clone()))
+            .get(&DataKey::Pledged(campaign_id, buyer.clone()))
             .ok_or(Error::NoPledge)?;
         if pledged <= 0 {
             return Err(Error::NoPledge);
@@ -186,48 +210,43 @@ impl Launchpad {
         if env
             .storage()
             .persistent()
-            .has(&DataKey::Claimed(buyer.clone()))
+            .has(&DataKey::Claimed(campaign_id, buyer.clone()))
         {
             return Err(Error::AlreadyClaimed);
         }
 
-        let price: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::PriceTokensPerXlm)
-            .ok_or(Error::NotInitialized)?;
         let token_addr: Address = env
             .storage()
             .instance()
             .get(&DataKey::Token)
             .ok_or(Error::NotInitialized)?;
-        let tokens = pledged * price / 10_000_000;
+        let tokens = pledged * campaign.price_tokens_per_xlm / 10_000_000;
 
         let token = TokenClient::new(&env, &token_addr);
         token.mint(&buyer, &tokens);
 
         env.storage()
             .persistent()
-            .set(&DataKey::Claimed(buyer.clone()), &true);
+            .set(&DataKey::Claimed(campaign_id, buyer.clone()), &true);
         env.events()
-            .publish((symbol_short!("claim"), buyer), (pledged, tokens));
+            .publish((symbol_short!("claim"), buyer), (campaign_id, pledged, tokens));
         Ok(tokens)
     }
 
-    pub fn refund(env: Env, buyer: Address) -> Result<i128, Error> {
+    pub fn refund(env: Env, buyer: Address, campaign_id: u64) -> Result<i128, Error> {
         buyer.require_auth();
-        let status: Status = env
+        let campaign: Campaign = env
             .storage()
-            .instance()
-            .get(&DataKey::Status)
-            .ok_or(Error::NotInitialized)?;
-        if status != Status::Failed {
+            .persistent()
+            .get(&DataKey::Campaign(campaign_id))
+            .ok_or(Error::CampaignNotFound)?;
+        if campaign.status != Status::Failed {
             return Err(Error::SoftCapMet);
         }
         let pledged: i128 = env
             .storage()
             .persistent()
-            .get(&DataKey::Pledged(buyer.clone()))
+            .get(&DataKey::Pledged(campaign_id, buyer.clone()))
             .ok_or(Error::NoPledge)?;
         if pledged <= 0 {
             return Err(Error::NoPledge);
@@ -235,46 +254,30 @@ impl Launchpad {
 
         env.storage()
             .persistent()
-            .set(&DataKey::Pledged(buyer.clone()), &0_i128);
+            .set(&DataKey::Pledged(campaign_id, buyer.clone()), &0_i128);
         env.events()
-            .publish((symbol_short!("refund"), buyer), pledged);
+            .publish((symbol_short!("refund"), buyer), (campaign_id, pledged));
         Ok(pledged)
     }
 
-    pub fn pledged_of(env: Env, who: Address) -> i128 {
+    pub fn pledged_of(env: Env, campaign_id: u64, who: Address) -> i128 {
         env.storage()
             .persistent()
-            .get(&DataKey::Pledged(who))
+            .get(&DataKey::Pledged(campaign_id, who))
             .unwrap_or(0)
     }
 
-    pub fn sale_state(env: Env) -> (i128, i128, i128, u64, Status) {
-        let total: i128 = env
-            .storage()
+    pub fn campaign(env: Env, campaign_id: u64) -> Option<Campaign> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Campaign(campaign_id))
+    }
+
+    pub fn campaign_count(env: Env) -> u64 {
+        env.storage()
             .instance()
-            .get(&DataKey::TotalRaised)
-            .unwrap_or(0);
-        let soft: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::SoftCap)
-            .unwrap_or(0);
-        let hard: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::HardCap)
-            .unwrap_or(0);
-        let deadline: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::Deadline)
-            .unwrap_or(0);
-        let status: Status = env
-            .storage()
-            .instance()
-            .get(&DataKey::Status)
-            .unwrap_or(Status::Active);
-        (total, soft, hard, deadline, status)
+            .get(&DataKey::NextId)
+            .unwrap_or(0)
     }
 
     pub fn token_contract(env: Env) -> Result<Address, Error> {

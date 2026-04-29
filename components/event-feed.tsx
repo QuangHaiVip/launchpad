@@ -77,16 +77,20 @@ function Row({ e }: { e: ContractEvent }) {
 }
 
 function summarize(e: ContractEvent): string {
-  const [a, b] = e.values;
+  // every event tuple now leads with campaign_id
+  const [campaignId, a, b] = e.values;
+  const cid = campaignId !== undefined ? `#${campaignId.toString()}` : "?";
   switch (e.kind) {
+    case "create":
+      return `call ${cid} opened: soft cap ${fmt(a ?? 0n)} XLM, hard cap ${fmt(b ?? 0n)} XLM`;
     case "pledge":
-      return `${fmt(a)} XLM pledged`;
+      return `${fmt(a ?? 0n)} XLM pledged into call ${cid}`;
     case "claim":
-      return `pledged ${fmt(a)} XLM, claimed ${b.toString()} tokens`;
+      return `call ${cid}: pledged ${fmt(a ?? 0n)} XLM, claimed ${b?.toString() ?? "0"} tokens`;
     case "refund":
-      return `${fmt(a)} XLM refunded`;
+      return `call ${cid}: ${fmt(a ?? 0n)} XLM refunded`;
     case "finalize":
-      return `total raised ${fmt(a)} XLM, status ${b.toString()}`;
+      return `call ${cid} finalized: total raised ${fmt(a ?? 0n)} XLM, status ${b?.toString() ?? "?"}`;
     default:
       return e.values.map((x) => x.toString()).join(" · ");
   }

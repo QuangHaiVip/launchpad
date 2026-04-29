@@ -1,7 +1,7 @@
 import { rpc, xdr, scValToNative } from "@stellar/stellar-sdk";
 import { sorobanRpc } from "./soroban";
 
-export type LaunchKind = "pledge" | "claim" | "refund" | "finalize";
+export type LaunchKind = "create" | "pledge" | "claim" | "refund" | "finalize";
 
 export type ContractEvent = {
   id: string;
@@ -13,7 +13,7 @@ export type ContractEvent = {
   values: bigint[];
 };
 
-const TOPICS: LaunchKind[] = ["pledge", "claim", "refund", "finalize"];
+const TOPICS: LaunchKind[] = ["create", "pledge", "claim", "refund", "finalize"];
 
 export async function getRecentEvents(
   contractId: string,
