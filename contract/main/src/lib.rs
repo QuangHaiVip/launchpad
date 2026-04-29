@@ -2,7 +2,7 @@
 
 use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, contracttype,
-    symbol_short, Address, Env,
+    symbol_short, token, Address, Env,
 };
 
 #[contracterror]
@@ -20,6 +20,8 @@ pub enum Error {
     AlreadyClaimed = 9,
     CampaignNotFound = 10,
     InvalidParams = 11,
+    NotCreator = 12,
+    AlreadyWithdrawn = 13,
 }
 
 #[contracttype]
@@ -46,10 +48,12 @@ pub struct Campaign {
 #[derive(Clone)]
 pub enum DataKey {
     Token,
+    Native,
     NextId,
     Campaign(u64),
     Pledged(u64, Address),
     Claimed(u64, Address),
+    Withdrawn(u64),
 }
 
 #[contractclient(name = "TokenClient")]
@@ -62,8 +66,9 @@ pub struct Launchpad;
 
 #[contractimpl]
 impl Launchpad {
-    pub fn __constructor(env: Env, token: Address) {
+    pub fn __constructor(env: Env, token: Address, native: Address) {
         env.storage().instance().set(&DataKey::Token, &token);
+        env.storage().instance().set(&DataKey::Native, &native);
         env.storage().instance().set(&DataKey::NextId, &0_u64);
     }
 
@@ -138,6 +143,14 @@ impl Launchpad {
         if campaign.total_raised + amount > campaign.hard_cap {
             return Err(Error::HardCapExceeded);
         }
+
+        let native_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Native)
+            .ok_or(Error::NotInitialized)?;
+        let xlm = token::Client::new(&env, &native_addr);
+        xlm.transfer(&buyer, &env.current_contract_address(), &amount);
 
         let prev: i128 = env
             .storage()
@@ -255,9 +268,60 @@ impl Launchpad {
         env.storage()
             .persistent()
             .set(&DataKey::Pledged(campaign_id, buyer.clone()), &0_i128);
+
+        let native_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Native)
+            .ok_or(Error::NotInitialized)?;
+        let xlm = token::Client::new(&env, &native_addr);
+        xlm.transfer(&env.current_contract_address(), &buyer, &pledged);
+
         env.events()
             .publish((symbol_short!("refund"), buyer), (campaign_id, pledged));
         Ok(pledged)
+    }
+
+    /// After a successful campaign, the creator pulls the raised XLM out.
+    /// Idempotent per campaign: a second call returns AlreadyWithdrawn.
+    pub fn withdraw(env: Env, creator: Address, campaign_id: u64) -> Result<i128, Error> {
+        creator.require_auth();
+        let campaign: Campaign = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Campaign(campaign_id))
+            .ok_or(Error::CampaignNotFound)?;
+        if campaign.creator != creator {
+            return Err(Error::NotCreator);
+        }
+        if campaign.status != Status::Successful {
+            return Err(Error::SoftCapNotMet);
+        }
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Withdrawn(campaign_id))
+        {
+            return Err(Error::AlreadyWithdrawn);
+        }
+
+        let total = campaign.total_raised;
+        let native_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Native)
+            .ok_or(Error::NotInitialized)?;
+        let xlm = token::Client::new(&env, &native_addr);
+        xlm.transfer(&env.current_contract_address(), &creator, &total);
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Withdrawn(campaign_id), &true);
+        env.events().publish(
+            (symbol_short!("withdraw"), creator),
+            (campaign_id, total),
+        );
+        Ok(total)
     }
 
     pub fn pledged_of(env: Env, campaign_id: u64, who: Address) -> i128 {
@@ -271,6 +335,12 @@ impl Launchpad {
         env.storage()
             .persistent()
             .get(&DataKey::Campaign(campaign_id))
+    }
+
+    pub fn was_withdrawn(env: Env, campaign_id: u64) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::Withdrawn(campaign_id))
     }
 
     pub fn campaign_count(env: Env) -> u64 {

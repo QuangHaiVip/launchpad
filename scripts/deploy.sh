@@ -18,6 +18,9 @@ SOURCE="${1:-alice}"
 NETWORK="testnet"
 ENV_FILE=.env.local
 
+# Stellar testnet native XLM SAC. Constant for the network so we don't re-derive each run.
+NATIVE_XLM="CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+
 USES_TOKEN=0
 if [ -d "contract/receipt" ]; then
   USES_TOKEN=1
@@ -66,13 +69,14 @@ if [ "$USES_TOKEN" -eq 1 ]; then
     --wasm "$MAIN_WASM" \
     --source "$SOURCE" \
     --network "$NETWORK" \
-    -- --token "$RECEIPT" \
+    -- --token "$RECEIPT" --native "$NATIVE_XLM" \
     2>&1 | tail -1)
 else
   MAIN=$(stellar contract deploy \
     --wasm "$MAIN_WASM" \
     --source "$SOURCE" \
     --network "$NETWORK" \
+    -- --native "$NATIVE_XLM" \
     2>&1 | tail -1)
 fi
 [[ "$MAIN" =~ ^C[A-Z0-9]{55}$ ]] || { echo "main deploy failed: $MAIN"; exit 1; }

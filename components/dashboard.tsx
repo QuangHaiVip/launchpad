@@ -12,6 +12,8 @@ import {
   useClaim,
   useRefund,
   useFinalize,
+  useWithdraw,
+  useWasWithdrawn,
   usePledgedOf,
   useTokenBalance,
   statusLabel,
@@ -372,6 +374,9 @@ function SelectedCampaign({ campaign }: { campaign: Campaign }) {
           <BalanceCard />
           <ClaimRefundPanel campaign={campaign} />
           {campaign.status === 0 && <FinalizePanel campaign={campaign} />}
+          {campaign.status === 1 && address === campaign.creator && (
+            <WithdrawPanel campaign={campaign} />
+          )}
         </div>
       )}
     </section>
@@ -574,6 +579,45 @@ function FinalizePanel({ campaign }: { campaign: Campaign }) {
       >
         {finalize.isPending ? "Finalizing…" : "Finalize sale"}
       </button>
+    </div>
+  );
+}
+
+function WithdrawPanel({ campaign }: { campaign: Campaign }) {
+  const { address } = useWallet();
+  const withdraw = useWithdraw(address);
+  const { data: alreadyWithdrawn } = useWasWithdrawn(campaign.id);
+
+  const err = withdraw.error ? toError(withdraw.error) : null;
+
+  return (
+    <div className="rounded-lg border border-success/40 bg-success/5 p-5">
+      <div className="font-mono text-xs uppercase tracking-wider text-success">
+        Creator payout
+      </div>
+      <p className="mt-2 text-sm text-muted">
+        Sale closed Successful. Withdraw the raised{" "}
+        <span className="font-mono">{fmtXlm(campaign.totalRaised)}</span> XLM
+        to your wallet.
+      </p>
+      <button
+        onClick={() => withdraw.mutate(campaign.id)}
+        disabled={withdraw.isPending || alreadyWithdrawn === true}
+        className="mt-3 w-full rounded-md bg-success px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-success/90 disabled:opacity-50"
+      >
+        {alreadyWithdrawn
+          ? "Already withdrawn"
+          : withdraw.isPending
+            ? "Withdrawing…"
+            : "Withdraw raised XLM"}
+      </button>
+      {err && (
+        <div className="mt-3 rounded-md border border-danger/30 bg-danger/5 p-3 text-xs text-danger">
+          {err instanceof UserRejectedError
+            ? "You rejected the request in your wallet."
+            : `Failed: ${err.message}`}
+        </div>
+      )}
     </div>
   );
 }

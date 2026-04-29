@@ -35,6 +35,7 @@ function invalidate(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: ["campaigns"] });
   qc.invalidateQueries({ queryKey: ["campaign-count"] });
   qc.invalidateQueries({ queryKey: ["pledged"] });
+  qc.invalidateQueries({ queryKey: ["withdrawn"] });
   qc.invalidateQueries({ queryKey: ["events"] });
 }
 
@@ -114,6 +115,24 @@ export function useRefund(address: string | null) {
       return invokeContract({
         contractId: id,
         method: "refund",
+        args: [addrArg(address), u64Arg(campaignId)],
+        source: address,
+        signXdr: signer(address),
+      });
+    },
+    onSuccess: () => invalidate(qc),
+  });
+}
+
+export function useWithdraw(address: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (campaignId: bigint) => {
+      if (!address) throw new Error("connect a wallet first");
+      const id = ensureId();
+      return invokeContract({
+        contractId: id,
+        method: "withdraw",
         args: [addrArg(address), u64Arg(campaignId)],
         source: address,
         signXdr: signer(address),
@@ -271,6 +290,22 @@ export function usePledgedOf(address: string | null, campaignId: bigint | null) 
       });
     },
     enabled: !!PAD_ID && !!address && campaignId !== null,
+    refetchInterval: 8_000,
+  });
+}
+
+export function useWasWithdrawn(campaignId: bigint | null) {
+  return useQuery<boolean>({
+    queryKey: ["withdrawn", PAD_ID, campaignId?.toString() ?? null],
+    queryFn: async () => {
+      if (!PAD_ID || campaignId === null) return false;
+      return readContract<boolean>({
+        contractId: PAD_ID,
+        method: "was_withdrawn",
+        args: [u64Arg(campaignId)],
+      });
+    },
+    enabled: !!PAD_ID && campaignId !== null,
     refetchInterval: 8_000,
   });
 }
